@@ -1,166 +1,117 @@
+# search_engine.py 파일을 다음과 같이 수정
 import time
 import logging
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from bs4 import BeautifulSoup
-import urllib.parse
+import asyncio
+from requests_html import AsyncHTMLSession
 
 class NaverPlaceSearchEngine:
     """네이버 플레이스 검색 엔진 클래스"""
     
-    def __init__(self, headless=True):
-        """
-        검색 엔진 초기화
-        
-        Args:
-            headless (bool): 헤드리스 모드 사용 여부
-        """
+    def __init__(self):
         self.logger = logging.getLogger("NaverPlaceSearchEngine")
-        self.headless = headless
-        self.driver = None
         
-    def _setup_driver(self):
-        """Selenium WebDriver 설정"""
-        options = webdriver.ChromeOptions()
-        if self.headless:
-            options.add_argument('--headless')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--log-level=3')
-        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
-    
-        try:
-            # 기본 방식으로 ChromeDriver 실행 시도
-            return webdriver.Chrome(options=options)
-        except Exception as e:
-            self.logger.warning(f"기본 ChromeDriver 실행 실패: {e}")
-        
-            # webdriver_manager 사용하여 ChromeDriver 설치 및 실행
-            try:
-                from webdriver_manager.chrome import ChromeDriverManager
-                from selenium.webdriver.chrome.service import Service
-                service = Service(ChromeDriverManager().install())
-                return webdriver.Chrome(service=service, options=options)
-            except Exception as e:
-                self.logger.error(f"ChromeDriverManager 사용 실패: {e}")
-                raise
-
-    
     def build_url(self, keyword):
-        """
-        검색어를 기반으로 네이버 지도 검색 URL을 생성
-        
-        Args:
-            keyword (str): 검색 키워드
-            
-        Returns:
-            str: 검색 URL
-        """
+        """검색어를 기반으로 네이버 지도 검색 URL을 생성"""
+        import urllib.parse
         encoded_keyword = urllib.parse.quote(keyword)
         return f"https://map.naver.com/p/search/{encoded_keyword}?searchType=place"
     
-    def search(self, keyword, shop_name, max_scrolls=50):
-        """
-        키워드로 검색하여 특정 상호명의 순위를 찾음
+    async def _search_async(self, keyword, shop_name, max_scrolls=50) :
+        session = AsyncHTMLSession()
+        url = self.build_url(keyword)
         
-        Args:
-            keyword (str): 검색 키워드
-            shop_name (str): 찾을 상호명
-            max_scrolls (int): 최대 스크롤 횟수
+        # 페이지 로드
+        response = await session.get(url)
+        await response.html.arender(sleep=3)  # JavaScript 실행 대기
+        
+        # iframe 전환 (JavaScript로 iframe 내용 가져오기)
+        iframe_content = await response.html.render(script="""
+            () => {
+                const iframe = document.getElementById('searchIframe');
+                if (iframe && iframe.contentDocument) {
+                    return iframe.contentDocument.documentElement.outerHTML;
+                }
+                return null;
+            }
+        """)
+        
+        if not iframe_content:
+            return {"success": False, "message": "iframe을 찾을 수 없습니다."}
+        
+        # BeautifulSoup 대신 requests-html의 파싱 기능 사용
+        rank = 0
+        found = False
+        
+        for scroll_count in range(max_scrolls):
+            # 스크롤 실행
+            await response.html.render(script="""
+                () => {
+                    const iframe = document.getElementById('searchIframe');
+                    if (iframe && iframe.contentDocument) {
+                        const container = iframe.contentDocument.querySelector('#_pcmap_list_scroll_container');
+                        if (container) {
+                            container.scrollTo(0, container.scrollHeight);
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            """)
             
-        Returns:
-            dict: 검색 결과 (순위, 성공 여부, 메시지 등)
-        """
-        result = {
-            "keyword": keyword,
-            "shop_name": shop_name,
-            "rank": -1,
+            await asyncio.sleep(1)  # 스크롤 후 대기
+            
+            # 현재 페이지의 상점 목록 파싱
+            shops_html = await response.html.render(script="""
+                () => {
+                    const iframe = document.getElementById('searchIframe');
+                    if (iframe && iframe.contentDocument) {
+                        const shops = Array.from(iframe.contentDocument.querySelectorAll('#_pcmap_list_scroll_container > ul > li'));
+                        return shops.map(shop => shop.outerHTML);
+                    }
+                    return [];
+                }
+            """)
+            
+            # 각 상점 확인
+            for shop_html in shops_html:
+                # 광고 건너뛰기
+                if 'gU6bV._DHlh' in shop_html:
+                    continue
+                    
+                rank += 1
+                
+                # 상점명 확인
+                shop_name_match = re.search(r'<span class="O_Uah">(.*?)</span>', shop_html)
+                if shop_name_match and shop_name_match.group(1) == shop_name:
+                    return {
+                        "success": True,
+                        "rank": rank,
+                        "message": f"'{shop_name}'은(는) '{keyword}' 검색 결과에서 {rank}위입니다.",
+                        "search_time": time.strftime("%Y-%m-%d %H:%M:%S")
+                    }
+        
+        # 찾지 못한 경우
+        return {
             "success": False,
-            "message": "",
+            "rank": -1,
+            "message": f"'{shop_name}'을(를) 찾을 수 없습니다.",
             "search_time": time.strftime("%Y-%m-%d %H:%M:%S")
         }
-        
+    
+    def search(self, keyword, shop_name, max_scrolls=50):
+        """키워드로 검색하여 특정 상호명의 순위를 찾음"""
         try:
-            self.driver = self._setup_driver()
-            url = self.build_url(keyword)
-            self.driver.get(url)
-            self.logger.info(f"URL: {url}")
-            
-            # iframe 로딩 대기 및 전환
-            try:
-                WebDriverWait(self.driver, 10).until(
-                    EC.frame_to_be_available_and_switch_to_it((By.ID, "searchIframe"))
-                )
-            except TimeoutException:
-                result["message"] = "iframe 로딩 시간 초과"
-                self.logger.error(result["message"])
-                return result
-            
-            # 검색 결과 컨테이너 로딩 대기
-            try:
-                WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "div.Ryr1F#_pcmap_list_scroll_container"))
-                )
-            except TimeoutException:
-                self.driver.save_screenshot("error_screenshot.png")
-                result["message"] = "페이지 로딩 실패 또는 검색 결과 없음"
-                self.logger.error(result["message"])
-                return result
-            
-            rank = 0
-            found = False
-            scroll_count = 0
-            
-            while not found and scroll_count < max_scrolls:
-                scroll_count += 1
-                self.logger.info(f"스크롤 횟수: {scroll_count}")
-                
-                # 현재 페이지 소스에서 상점 목록 추출
-                soup = BeautifulSoup(self.driver.page_source, "html.parser")
-                shop_list_element = soup.select("div.Ryr1F#_pcmap_list_scroll_container > ul > li")
-                
-                for shop_element in shop_list_element:
-                    # 광고 요소 건너뛰기
-                    ad_element = shop_element.select_one(".gU6bV._DHlh")
-                    if ad_element:
-                        continue
-                    
-                    rank += 1
-                    shop_name_element = shop_element.select_one(".place_bluelink.tWIhh > span.O_Uah")
-                    
-                    if shop_name_element:
-                        current_shop_name = shop_name_element.text.strip()
-                        if current_shop_name == shop_name:
-                            result["rank"] = rank
-                            result["success"] = True
-                            result["message"] = f"'{shop_name}'은(는) '{keyword}' 검색 결과에서 {rank}위입니다."
-                            self.logger.info(result["message"])
-                            found = True
-                            break
-                
-                if found:
-                    break
-                
-                # 다음 결과를 위해 스크롤
-                self.driver.execute_script(
-                    "document.querySelector('#_pcmap_list_scroll_container').scrollTo(0, document.querySelector('#_pcmap_list_scroll_container').scrollHeight)"
-                )
-                time.sleep(1)
-            
-            if not found:
-                result["message"] = f"'{shop_name}'을(를) 찾을 수 없습니다."
-                self.logger.warning(result["message"])
-        
+            # 비동기 함수 실행
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(self._search_async(keyword, shop_name, max_scrolls))
+            loop.close()
+            return result
         except Exception as e:
-            result["message"] = f"오류 발생: {type(e).__name__} - {e}"
-            self.logger.error(result["message"])
-        
-        finally:
-            if self.driver:
-                self.driver.quit()
-                
-        return result
+            self.logger.error(f"오류 발생: {type(e).__name__} - {e}")
+            return {
+                "success": False,
+                "rank": -1,
+                "message": f"오류 발생: {type(e).__name__} - {e}",
+                "search_time": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
