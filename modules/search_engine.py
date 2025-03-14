@@ -28,14 +28,20 @@ class NaverPlaceSearchEngine:
         if self.headless:
             options.add_argument('--headless')
         options.add_argument('--disable-gpu')
-        options.add_argument('--log-level=3')
-        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
-        
-        # GitHub Actions에서 실행될 때 필요한 추가 옵션
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
-        
-        return webdriver.Chrome(options=options)
+        options.add_argument('--log-level=3')
+        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
+    
+        # Streamlit Cloud 환경에서 실행될 때 필요한 설정
+        try:
+            return webdriver.Chrome(options=options)
+        except:
+            # ChromeDriver 경로 문제 시 대체 방법
+            from webdriver_manager.chrome import ChromeDriverManager
+            from selenium.webdriver.chrome.service import Service
+            service = Service(ChromeDriverManager().install())
+            return webdriver.Chrome(service=service, options=options)
     
     def build_url(self, keyword):
         """
