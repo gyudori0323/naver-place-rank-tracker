@@ -35,7 +35,7 @@ def run_search(keyword, shop_name):
     st.info(f"'{keyword}'에서 '{shop_name}' 검색 중... 잠시만 기다려주세요.")
     
     # 검색 엔진 초기화 및 검색 실행
-    search_engine = NaverPlaceSearchEngine(headless=True)
+    search_engine = NaverPlaceSearchEngine()
     result = search_engine.search(keyword, shop_name)
     
     # 검색 결과 저장
