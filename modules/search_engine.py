@@ -33,15 +33,22 @@ class NaverPlaceSearchEngine:
         options.add_argument('--log-level=3')
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
     
-        # Streamlit Cloud 환경에서 실행될 때 필요한 설정
         try:
+            # 기본 방식으로 ChromeDriver 실행 시도
             return webdriver.Chrome(options=options)
-        except:
-            # ChromeDriver 경로 문제 시 대체 방법
-            from webdriver_manager.chrome import ChromeDriverManager
-            from selenium.webdriver.chrome.service import Service
-            service = Service(ChromeDriverManager().install())
-            return webdriver.Chrome(service=service, options=options)
+        except Exception as e:
+            self.logger.warning(f"기본 ChromeDriver 실행 실패: {e}")
+        
+            # webdriver_manager 사용하여 ChromeDriver 설치 및 실행
+            try:
+                from webdriver_manager.chrome import ChromeDriverManager
+                from selenium.webdriver.chrome.service import Service
+                service = Service(ChromeDriverManager().install())
+                return webdriver.Chrome(service=service, options=options)
+            except Exception as e:
+                self.logger.error(f"ChromeDriverManager 사용 실패: {e}")
+                raise
+
     
     def build_url(self, keyword):
         """
